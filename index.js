@@ -1,77 +1,75 @@
-var app = require('express')();
-var http = require('http').Server(app);
-var io = require('socket.io')(http);
-//pair of user's name and user's socket
-var currentUsers = [];
-var currentSockets = [];
-var typingUsers = [];
+// Setup basic express server
+var express = require('express');
+var app = express();
+var server = require('http').createServer(app);
+var io = require('socket.io')(server);
+var port = process.env.PORT || 3000;
 
-app.get('/', function(req, res){
-  res.sendFile(__dirname + '/index.html');
+server.listen(port, function () {
+  console.log('Server listening at port %d', port);
 });
 
-io.on('connection', function(socket){
-  socket.on('chat message', function(userName, receiveName, msg, currentdate){
-	if(receiveName == 'all'){
-		//send message to all client without self
-		socket.broadcast.emit('chat message', userName, receiveName, msg, currentdate);
-	}
-	else{
-		currentSockets[currentUsers.indexOf(receiveName)].emit('chat message', userName, receiveName, msg, currentdate);
-	}
-  });
-  
-  socket.on('new user', function(userName){
-	//check user's name exist or not
-	if(currentUsers.indexOf(userName)==-1){
-		currentUsers.push(userName);
-		currentSockets.push(socket);
-		io.emit('user join', userName);
-		io.emit('add userList', userName);
-	}
-	else{
-		socket.emit('userName exist', userName);
-	}
-  });
-  
-  socket.on('start typing', function(name){
-	if(typingUsers.indexOf(name)==-1){
-		typingUsers.push(name);
-	}
-	io.emit('typing message', typingUsers);
-  });
-  
-  socket.on('stop typing', function(name){
-	if(typingUsers.indexOf(name)!=-1){
-		typingUsers.splice(typingUsers.indexOf(name),1);
-	}
-	io.emit('typing message', typingUsers);
-  });  
-  
-  socket.on('disconnect', function(){
-	if(currentSockets.indexOf(socket)!=-1){
-		//when disconnect username doesn't null, show user left message
-		//problem: sometimes client receive null left message, and nobody was disconnect.
-		if(currentUsers[currentSockets.indexOf(socket)] != null){
-			io.emit('user left', currentUsers[currentSockets.indexOf(socket)]);
-		}
-		//if disconnect user was typing, remove the name from typing list
-		if(typingUsers.indexOf(currentUsers[currentSockets.indexOf(socket)])!=-1){
-			typingUsers.splice(typingUsers.indexOf(currentUsers[currentSockets.indexOf(socket)]),1);
-			io.emit('typing message', typingUsers);
-		}
-		//remove leaved user's name and socket
-		currentUsers.splice(currentSockets.indexOf(socket),1);
-		currentSockets.splice(currentSockets.indexOf(socket),1);
-	}
-  });
-  
-  //when a new client connected add current users to client selector
-  for (var i = 0; i < currentUsers.length; i++) {
-    socket.emit('add userList', currentUsers[i]);
-  }
-});
+// Routing
+app.use(express.static(__dirname + '/public'));
 
-http.listen(process.env.PORT || 3000, function(){
-  console.log('listening on *:3000');
+// Chatroom
+
+var numUsers = 0;
+
+io.on('connection', function (socket) {
+  var addedUser = false;
+
+  // when the client emits 'new message', this listens and executes
+  socket.on('new message', function (data) {
+    // we tell the client to execute 'new message'
+    socket.broadcast.emit('new message', {
+      username: socket.username,
+      message: data
+    });
+  });
+
+  // when the client emits 'add user', this listens and executes
+  socket.on('add user', function (username) {
+    if (addedUser) return;
+
+    // we store the username in the socket session for this client
+    socket.username = username;
+    ++numUsers;
+    addedUser = true;
+    socket.emit('login', {
+      numUsers: numUsers
+    });
+    // echo globally (all clients) that a person has connected
+    socket.broadcast.emit('user joined', {
+      username: socket.username,
+      numUsers: numUsers
+    });
+  });
+
+  // when the client emits 'typing', we broadcast it to others
+  socket.on('typing', function () {
+    socket.broadcast.emit('typing', {
+      username: socket.username
+    });
+  });
+
+  // when the client emits 'stop typing', we broadcast it to others
+  socket.on('stop typing', function () {
+    socket.broadcast.emit('stop typing', {
+      username: socket.username
+    });
+  });
+
+  // when the user disconnects.. perform this
+  socket.on('disconnect', function () {
+    if (addedUser) {
+      --numUsers;
+
+      // echo globally that this client has left
+      socket.broadcast.emit('user left', {
+        username: socket.username,
+        numUsers: numUsers
+      });
+    }
+  });
 });
